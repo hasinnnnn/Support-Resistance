@@ -2,5 +2,6 @@ streamlit
 yfinance
 pandas
 numpy
+plotly
 matplotlib
 mplfinance
