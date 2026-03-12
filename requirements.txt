@@ -6,3 +6,4 @@ plotly
 matplotlib
 mplfinance
 requests
+yt-dlp
