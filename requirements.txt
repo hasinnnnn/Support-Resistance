@@ -1,4 +1,5 @@
 streamlit
+streamlit-paste-button
 yfinance
 pandas
 numpy
