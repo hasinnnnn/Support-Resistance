@@ -7,3 +7,5 @@ matplotlib
 mplfinance
 requests
 yt-dlp
+tesseract-ocr
+tesseract-ocr-ind
