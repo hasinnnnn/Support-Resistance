@@ -1,68 +1,83 @@
 import streamlit as st
-import requests
-import json
-import re
-from datetime import datetime, timedelta
+import yt_dlp
+from datetime import datetime, timedelta, timezone
 
-st.title("YouTube Video Title Scraper")
+st.set_page_config(page_title="YouTube Title Exporter", layout="centered")
+st.title("Export Judul Video YouTube ke TXT")
 
-channel_url = "https://www.youtube.com/@tvOneNews/videos"
+DEFAULT_CHANNEL = "https://www.youtube.com/@tvOneNews/videos"
 
-days = st.slider("Ambil video dari berapa hari terakhir", 1, 7, 2)
+channel_url = st.text_input("Channel URL", value=DEFAULT_CHANNEL)
+days = st.slider("Ambil video dari berapa hari terakhir?", 1, 7, 2)
+max_items = st.slider("Maksimal video terbaru yang dicek", 20, 300, 120, step=20)
 
-def get_video_titles(url):
+def parse_upload_date(upload_date_str: str):
+    if not upload_date_str:
+        return None
+    try:
+        return datetime.strptime(upload_date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
 
-    headers = {
-        "User-Agent": "Mozilla/5.0"
+def get_recent_titles(channel_url: str, days: int, max_items: int):
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "ignoreerrors": True,
+        "extract_flat": False,     # penting: upload_date sering kosong kalau flat
+        "playlistend": max_items,  # cek video terbaru saja
     }
 
-    r = requests.get(url, headers=headers)
-    html = r.text
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        info = ydl.extract_info(channel_url, download=False)
 
-    json_text = re.search(r"var ytInitialData = ({.*?});", html)
-
-    if not json_text:
-        st.error("Data tidak ditemukan")
+    if not info:
         return []
 
-    data = json.loads(json_text.group(1))
+    entries = info.get("entries", [])
+    if not entries:
+        return []
 
-    videos = []
+    results = []
+    for entry in entries:
+        if not entry:
+            continue
 
-    contents = data["contents"]["twoColumnBrowseResultsRenderer"]["tabs"][1] \
-        ["tabRenderer"]["content"]["richGridRenderer"]["contents"]
+        title = entry.get("title")
+        upload_date = parse_upload_date(entry.get("upload_date"))
 
-    for item in contents:
-        if "richItemRenderer" in item:
-            video = item["richItemRenderer"]["content"]["videoRenderer"]
+        if title and upload_date and upload_date >= cutoff:
+            results.append({
+                "title": title,
+                "upload_date": upload_date.strftime("%Y-%m-%d"),
+            })
 
-            title = video["title"]["runs"][0]["text"]
+    return results
 
-            published = video.get("publishedTimeText", {}).get("simpleText", "")
+if st.button("Ambil Judul Video"):
+    try:
+        data = get_recent_titles(channel_url, days, max_items)
 
-            videos.append((title, published))
+        if not data:
+            st.warning("Tidak ada video dalam rentang waktu itu, atau yt-dlp perlu di-update.")
+        else:
+            st.success(f"Ketemu {len(data)} video")
 
-    return videos
+            for i, item in enumerate(data, start=1):
+                st.write(f"{i}. {item['title']}")
 
+            txt_content = "\n".join(item["title"] for item in data)
 
-if st.button("Ambil Data Video"):
+            st.download_button(
+                label="Download TXT",
+                data=txt_content,
+                file_name="judul_video_tvonenews.txt",
+                mime="text/plain",
+            )
 
-    videos = get_video_titles(channel_url)
-
-    filtered = []
-    for title, published in videos:
-
-        if "day" in published or "hari" in published:
-            filtered.append(title)
-
-    st.write("### Judul Video")
-    for v in filtered:
-        st.write(v)
-
-    txt = "\n".join(filtered)
-
-    st.download_button(
-        "Download TXT",
-        txt,
-        file_name="judul_video_tvonenews.txt"
-    )
+    except Exception as e:
+        st.error(f"Gagal ambil data: {e}")
+        st.info("Coba update yt-dlp lalu jalankan lagi: python -m pip install -U yt-dlp")
