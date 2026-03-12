@@ -1,6 +1,8 @@
+import re
+from datetime import datetime, date
+
 import streamlit as st
 import yt_dlp
-from datetime import datetime, timedelta, timezone
 
 st.set_page_config(page_title="YouTube Title Exporter", layout="centered")
 st.title("Export Judul Video YouTube ke TXT")
@@ -8,73 +10,121 @@ st.title("Export Judul Video YouTube ke TXT")
 DEFAULT_CHANNEL = "https://www.youtube.com/@tvOneNews/videos"
 
 channel_url = st.text_input("Channel URL", value=DEFAULT_CHANNEL)
-days = st.slider("Ambil video dari berapa hari terakhir?", 1, 7, 2)
-max_items = st.slider("Maksimal video terbaru yang dicek", 20, 300, 120, step=20)
+target_date = st.date_input("Pilih tanggal video", value=date.today())
+max_items = st.slider("Maksimal video terbaru yang dicek", 20, 500, 200, step=20)
 
-def parse_upload_date(upload_date_str: str):
+
+def parse_upload_date(upload_date_str):
     if not upload_date_str:
         return None
     try:
-        return datetime.strptime(upload_date_str, "%Y%m%d").replace(tzinfo=timezone.utc)
+        return datetime.strptime(upload_date_str, "%Y%m%d").date()
     except Exception:
         return None
 
-def get_recent_titles(channel_url: str, days: int, max_items: int):
-    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
 
-    ydl_opts = {
+def build_video_url(entry):
+    if entry.get("webpage_url"):
+        return entry["webpage_url"]
+
+    if entry.get("url"):
+        url = entry["url"]
+        if isinstance(url, str) and url.startswith("http"):
+            return url
+        return f"https://www.youtube.com/watch?v={url}"
+
+    if entry.get("id"):
+        return f"https://www.youtube.com/watch?v={entry['id']}"
+
+    return None
+
+
+def safe_channel_name(channel_url):
+    match = re.search(r"youtube\.com/@([^/]+)", channel_url)
+    if match:
+        return match.group(1)
+    return "channel"
+
+
+def get_titles_by_date(channel_url, target_date, max_items):
+    # Ambil daftar video dulu
+    list_opts = {
         "quiet": True,
         "no_warnings": True,
         "skip_download": True,
         "ignoreerrors": True,
-        "extract_flat": False,     # penting: upload_date sering kosong kalau flat
-        "playlistend": max_items,  # cek video terbaru saja
+        "extract_flat": "in_playlist",
+        "playlistend": max_items,
     }
 
-    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+    # Ambil detail tiap video supaya upload_date tersedia
+    detail_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": True,
+        "ignoreerrors": True,
+    }
+
+    with yt_dlp.YoutubeDL(list_opts) as ydl:
         info = ydl.extract_info(channel_url, download=False)
 
     if not info:
         return []
 
-    entries = info.get("entries", [])
+    entries = info.get("entries") or []
     if not entries:
         return []
 
     results = []
-    for entry in entries:
-        if not entry:
-            continue
 
-        title = entry.get("title")
-        upload_date = parse_upload_date(entry.get("upload_date"))
+    with yt_dlp.YoutubeDL(detail_opts) as ydl:
+        for entry in entries:
+            if not entry:
+                continue
 
-        if title and upload_date and upload_date >= cutoff:
-            results.append({
-                "title": title,
-                "upload_date": upload_date.strftime("%Y-%m-%d"),
-            })
+            video_url = build_video_url(entry)
+            if not video_url:
+                continue
+
+            detail = ydl.extract_info(video_url, download=False)
+            if not detail:
+                continue
+
+            title = detail.get("title")
+            upload_date = parse_upload_date(detail.get("upload_date"))
+
+            if title and upload_date == target_date:
+                results.append({
+                    "title": title,
+                    "upload_date": upload_date.strftime("%Y-%m-%d"),
+                    "url": detail.get("webpage_url", video_url),
+                })
 
     return results
 
+
 if st.button("Ambil Judul Video"):
     try:
-        data = get_recent_titles(channel_url, days, max_items)
+        data = get_titles_by_date(channel_url, target_date, max_items)
 
         if not data:
-            st.warning("Tidak ada video dalam rentang waktu itu, atau yt-dlp perlu di-update.")
+            st.warning(
+                "Tidak ada video pada tanggal itu dalam rentang yang dicek. "
+                "Kalau tanggalnya lebih lama, naikkan 'Maksimal video terbaru yang dicek'."
+            )
         else:
-            st.success(f"Ketemu {len(data)} video")
+            st.success(f"Ketemu {len(data)} video pada {target_date.strftime('%Y-%m-%d')}")
 
             for i, item in enumerate(data, start=1):
                 st.write(f"{i}. {item['title']}")
 
             txt_content = "\n".join(item["title"] for item in data)
+            channel_name = safe_channel_name(channel_url)
 
             st.download_button(
                 label="Download TXT",
                 data=txt_content,
-                file_name="judul_video_tvonenews.txt",
+                file_name=f"judul_video_{channel_name}_{target_date.isoformat()}.txt",
                 mime="text/plain",
             )
 
