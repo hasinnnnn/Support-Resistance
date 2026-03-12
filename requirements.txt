@@ -7,9 +7,6 @@ matplotlib
 mplfinance
 requests
 yt-dlp
-tesseract-ocr
-tesseract-ocr-ind
-pandas
 PyPDF2
 python-docx
 pillow
