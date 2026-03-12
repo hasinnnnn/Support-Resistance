@@ -1,4 +1,5 @@
 from pathlib import Path
+import io
 
 import streamlit as st
 import pandas as pd
@@ -12,6 +13,12 @@ try:
 except Exception:
     OCR_AVAILABLE = False
 
+try:
+    from streamlit_paste_button import paste_image_button as pbutton
+    PASTE_AVAILABLE = True
+except Exception:
+    PASTE_AVAILABLE = False
+
 
 st.set_page_config(
     page_title="Text Extractor",
@@ -19,16 +26,23 @@ st.set_page_config(
     layout="wide",
 )
 
+SUPPORTED_TYPES = ["pdf", "docx", "txt", "csv", "png", "jpg", "jpeg"]
 
-SUPPORTED_TYPES = [
-    "pdf",
-    "docx",
-    "txt",
-    "csv",
-    "png",
-    "jpg",
-    "jpeg",
-]
+
+def configure_tesseract(custom_path: str | None = None) -> None:
+    if OCR_AVAILABLE and custom_path and custom_path.strip():
+        pytesseract.pytesseract.tesseract_cmd = custom_path.strip()
+
+
+def tesseract_is_ready() -> tuple[bool, str]:
+    if not OCR_AVAILABLE:
+        return False, "Package pytesseract belum terinstall."
+
+    try:
+        _ = pytesseract.get_tesseract_version()
+        return True, ""
+    except Exception as e:
+        return False, str(e)
 
 
 def extract_from_pdf(file_obj) -> str:
@@ -63,13 +77,20 @@ def extract_from_csv(file_obj) -> str:
     return df.to_string(index=False)
 
 
-def extract_from_image(file_obj, language: str = "eng") -> str:
-    if not OCR_AVAILABLE:
+def extract_from_pil_image(image: Image.Image, language: str = "eng") -> str:
+    ok, err = tesseract_is_ready()
+    if not ok:
         raise RuntimeError(
-            "pytesseract belum tersedia. Install pytesseract dan Tesseract OCR terlebih dahulu."
+            "Tesseract belum siap. "
+            "Install Tesseract OCR atau isi path Tesseract di sidebar.\n"
+            f"Detail: {err}"
         )
-    image = Image.open(file_obj)
     return pytesseract.image_to_string(image, lang=language)
+
+
+def extract_from_image_upload(file_obj, language: str = "eng") -> str:
+    image = Image.open(file_obj)
+    return extract_from_pil_image(image, language=language)
 
 
 def extract_text(uploaded_file, ocr_language: str) -> str:
@@ -84,7 +105,7 @@ def extract_text(uploaded_file, ocr_language: str) -> str:
     if suffix == "csv":
         return extract_from_csv(uploaded_file)
     if suffix in {"png", "jpg", "jpeg"}:
-        return extract_from_image(uploaded_file, language=ocr_language)
+        return extract_from_image_upload(uploaded_file, language=ocr_language)
 
     raise ValueError(f"Format file .{suffix} belum didukung.")
 
@@ -94,75 +115,114 @@ def make_download_name(original_name: str) -> str:
     return f"{stem}_extracted.txt"
 
 
+def show_result_block(title: str, extracted_text: str, download_name: str, key_prefix: str):
+    if not extracted_text.strip():
+        st.warning("Tidak ada teks yang berhasil diekstrak.")
+        return
+
+    col1, col2 = st.columns([2, 1])
+
+    with col1:
+        st.text_area(
+            title,
+            value=extracted_text,
+            height=300,
+            key=f"{key_prefix}_preview",
+        )
+
+    with col2:
+        st.metric("Jumlah karakter", len(extracted_text))
+        st.metric("Jumlah kata", len(extracted_text.split()))
+        st.download_button(
+            label="⬇️ Download TXT",
+            data=extracted_text,
+            file_name=download_name,
+            mime="text/plain",
+            key=f"{key_prefix}_download",
+        )
+
+
 st.title("📝 Text Extractor")
 st.caption("Extract teks dari PDF, DOCX, TXT, CSV, dan gambar (OCR).")
 
 with st.sidebar:
     st.header("Pengaturan")
+
     ocr_language = st.selectbox(
         "Bahasa OCR",
         options=["eng", "ind"],
         index=0,
-        help="Untuk gambar. 'ind' membutuhkan data bahasa Indonesia di Tesseract.",
-    )
-    st.info(
-        "OCR gambar memakai Tesseract. Kalau upload PNG/JPG/JPEG gagal, pastikan Tesseract OCR sudah terpasang di sistem."
+        help="Untuk OCR gambar. 'ind' butuh bahasa Indonesia di Tesseract.",
     )
 
+    tesseract_path = st.text_input(
+        "Path Tesseract (opsional)",
+        placeholder=r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        help="Isi kalau Tesseract sudah terinstall tapi belum masuk PATH.",
+    )
+
+    configure_tesseract(tesseract_path)
+
+    ok, err = tesseract_is_ready()
+    if ok:
+        st.success("Tesseract terdeteksi.")
+    else:
+        st.warning("Tesseract belum terdeteksi.")
+        st.caption(err)
+
+st.subheader("📋 Paste gambar langsung")
+if PASTE_AVAILABLE:
+    st.caption("Copy gambar ke clipboard, lalu klik tombol paste.")
+    paste_result = pbutton(
+        label="Paste gambar dari clipboard",
+        key="paste_btn",
+        errors="raise",
+    )
+
+    if paste_result.image_data is not None:
+        st.image(paste_result.image_data, caption="Gambar dari clipboard", use_container_width=True)
+
+        try:
+            extracted_text = extract_from_pil_image(
+                paste_result.image_data,
+                language=ocr_language,
+            )
+            show_result_block(
+                "Hasil OCR dari clipboard",
+                extracted_text,
+                "clipboard_image_extracted.txt",
+                "clipboard",
+            )
+        except Exception as e:
+            st.error(f"Gagal OCR dari clipboard: {e}")
+else:
+    st.info("Install package `streamlit-paste-button` untuk fitur paste clipboard.")
+
+st.divider()
+
+st.subheader("Upload file")
 uploaded_files = st.file_uploader(
     "Upload satu atau beberapa file",
     type=SUPPORTED_TYPES,
     accept_multiple_files=True,
 )
 
-if not uploaded_files:
-    st.markdown(
-        """
-        ### Fitur
-        - Extract teks dari **PDF**
-        - Baca isi **DOCX**, **TXT**, dan **CSV**
-        - OCR untuk **PNG/JPG/JPEG**
-        - Preview hasil
-        - Download hasil ekstraksi sebagai `.txt`
-        """
-    )
-    st.stop()
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        with st.container(border=True):
+            st.subheader(f"📄 {uploaded_file.name}")
+            st.write(f"Ukuran file: **{uploaded_file.size:,} bytes**")
 
-for uploaded_file in uploaded_files:
-    with st.container(border=True):
-        st.subheader(f"📄 {uploaded_file.name}")
-        st.write(f"Ukuran file: **{uploaded_file.size:,} bytes**")
-
-        try:
-            extracted_text = extract_text(uploaded_file, ocr_language=ocr_language)
-
-            if not extracted_text.strip():
-                st.warning("Tidak ada teks yang berhasil diekstrak dari file ini.")
-                continue
-
-            col1, col2 = st.columns([2, 1])
-
-            with col1:
-                st.text_area(
+            try:
+                extracted_text = extract_text(uploaded_file, ocr_language=ocr_language)
+                show_result_block(
                     "Hasil ekstraksi",
-                    value=extracted_text,
-                    height=300,
-                    key=f"preview_{uploaded_file.name}",
+                    extracted_text,
+                    make_download_name(uploaded_file.name),
+                    uploaded_file.name,
                 )
-
-            with col2:
-                st.metric("Jumlah karakter", len(extracted_text))
-                st.metric("Jumlah kata", len(extracted_text.split()))
-                st.download_button(
-                    label="⬇️ Download TXT",
-                    data=extracted_text,
-                    file_name=make_download_name(uploaded_file.name),
-                    mime="text/plain",
-                    key=f"download_{uploaded_file.name}",
-                )
-
-        except Exception as e:
-            st.error(f"Gagal extract file: {e}")
+            except Exception as e:
+                st.error(f"Gagal extract file: {e}")
 
 st.divider()
 st.caption("Dibuat dengan Python + Streamlit")
