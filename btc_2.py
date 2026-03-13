@@ -243,6 +243,26 @@ def load_data(interval: str, period: str) -> Tuple[pd.DataFrame, Optional[str], 
 
     request_kwargs = resolve_range(effective_period)
 
+    def normalize_index(df: pd.DataFrame) -> pd.DataFrame:
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        out = df.copy()
+        out.index = pd.to_datetime(out.index)
+
+        if isinstance(out.index, pd.DatetimeIndex):
+            try:
+                if out.index.tz is not None:
+                    out.index = out.index.tz_convert("UTC").tz_localize(None)
+            except Exception:
+                try:
+                    out.index = out.index.tz_localize(None)
+                except Exception:
+                    pass
+
+        out = out[~out.index.duplicated(keep="last")].sort_index()
+        return out
+
     def fetch_one(symbol: str) -> pd.DataFrame:
         df = yf.download(
             symbol,
@@ -278,7 +298,7 @@ def load_data(interval: str, period: str) -> Tuple[pd.DataFrame, Optional[str], 
         if not needed.issubset(set(df.columns)):
             return pd.DataFrame()
 
-        return df.copy()
+        return normalize_index(df)
 
     btc = fetch_one("BTC-USD")
     fx = fetch_one("IDR=X")
@@ -289,11 +309,11 @@ def load_data(interval: str, period: str) -> Tuple[pd.DataFrame, Optional[str], 
     btc = btc[["Open", "High", "Low", "Close", "Volume"]].dropna().copy()
     fx = fx[["Close"]].rename(columns={"Close": "FX"}).dropna().copy()
 
-    btc.index = pd.to_datetime(btc.index)
-    fx.index = pd.to_datetime(fx.index)
+    btc = normalize_index(btc)
+    fx = normalize_index(fx)
 
-    btc = btc[~btc.index.duplicated(keep="last")].sort_index()
-    fx = fx[~fx.index.duplicated(keep="last")].sort_index()
+    if btc.empty or fx.empty:
+        return pd.DataFrame(), "Index data BTC atau kurs USD/IDR kosong setelah normalisasi.", effective_period
 
     df = btc.join(fx, how="left")
     df["FX"] = df["FX"].ffill().bfill()
@@ -305,10 +325,7 @@ def load_data(interval: str, period: str) -> Tuple[pd.DataFrame, Optional[str], 
 
     if isinstance(df.index, pd.DatetimeIndex):
         try:
-            if df.index.tz is None:
-                df.index = df.index.tz_localize("UTC")
-            df.index = df.index.tz_convert("Asia/Jakarta")
-            df.index = df.index.tz_localize(None)
+            df.index = df.index.tz_localize("UTC").tz_convert("Asia/Jakarta").tz_localize(None)
         except Exception:
             pass
 
