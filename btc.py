@@ -10,14 +10,11 @@ from plotly.subplots import make_subplots
 import streamlit as st
 import yfinance as yf
 
-st.set_page_config(
-    page_title="BTC/IDR Analysis",
-    layout="wide",
-)
+st.set_page_config(page_title="BTC/IDR Analysis", layout="wide")
 
-# =========================
+# =========================================================
 # DATA CLASSES
-# =========================
+# =========================================================
 @dataclass
 class LevelCluster:
     kind: str
@@ -54,11 +51,9 @@ class SignalCard:
     note: str
 
 
-# =========================
+# =========================================================
 # CONSTANTS
-# =========================
-SYMBOL = "BTC-IDR"
-
+# =========================================================
 GREEN = "#00C853"
 RED = "#FF3B30"
 BROWN = "#A66A2F"
@@ -70,7 +65,7 @@ MA_COLORS = {
     100: "#00B8D9",
     200: "#F15BB5",
 }
-MA_VOL_COLOR = "#3C3C3C"
+MA_VOL_COLOR = "#2C2C2C"
 CARD_BG = "#07111F"
 CARD_BORDER = "#17304D"
 BADGE_BG = "rgba(11,163,74,0.18)"
@@ -122,38 +117,38 @@ FIB_LEVEL_SPECS = [
         "ratio": 0.236,
         "ratio_label": "23,6% (0.236)",
         "short_note": "Koreksi ringan",
-        "description": "Koreksi ringan, sering muncul saat tren utama masih kuat.",
+        "description": "Menandakan koreksi ringan, sering muncul saat tren utama sangat kuat.",
     },
     {
         "ratio": 0.382,
         "ratio_label": "38,2% (0.382)",
         "short_note": "Koreksi umum",
-        "description": "Zona koreksi umum dan area support/resistance awal.",
+        "description": "Zona koreksi umum dan area support/resistance awal yang sering dipantau trader.",
     },
     {
         "ratio": 0.500,
         "ratio_label": "50% (0.500)",
         "short_note": "Level psikologis",
-        "description": "Bukan rasio Fibonacci asli, tapi sering jadi area pantulan.",
+        "description": "Bukan rasio Fibonacci asli, tetapi level penting tempat harga sering berbalik.",
     },
     {
         "ratio": 0.618,
         "ratio_label": "61,8% (0.618)",
         "short_note": "Golden Ratio",
-        "description": "Level Fibonacci paling penting yang sering dipantau trader.",
+        "description": "Level terpenting; probabilitas rebound atau reversal biasanya paling diperhatikan di area ini.",
     },
     {
         "ratio": 0.786,
         "ratio_label": "78,6% (0.786)",
         "short_note": "Koreksi dalam",
-        "description": "Koreksi dalam, sering jadi batas akhir sebelum reversal besar.",
+        "description": "Menandakan koreksi dalam dan sering jadi batas akhir sebelum pembalikan arah besar.",
     },
 ]
 
 
-# =========================
-# HELPERS
-# =========================
+# =========================================================
+# LABEL HELPERS
+# =========================================================
 def label_timeframe(interval: str) -> str:
     return {
         "60m": "1 Jam",
@@ -182,6 +177,7 @@ def is_intraday_interval(interval: str) -> bool:
 def coerce_period_for_interval(interval: str, period: str) -> Tuple[str, Optional[str]]:
     if interval not in INTRADAY_LIMITS:
         return period, None
+
     limit = INTRADAY_LIMITS[interval]
     if PERIOD_RANK.get(period, 0) <= PERIOD_RANK.get(limit, 99):
         return period, None
@@ -194,57 +190,80 @@ def coerce_period_for_interval(interval: str, period: str) -> Tuple[str, Optiona
 
 
 def value_formatter(x: float) -> str:
-    if x >= 1_000_000_000:
-        return f"{x:,.0f}"
-    if x >= 1000:
+    if abs(x) >= 1000:
         return f"{x:,.0f}"
     return f"{x:.2f}"
 
 
-# =========================
-# LOAD DATA
-# =========================
+# =========================================================
+# DATA LOADING
+# =========================================================
 @st.cache_data(ttl=900, show_spinner=False)
-def load_data(symbol: str, interval: str, period: str) -> Tuple[pd.DataFrame, Optional[str], str]:
+def load_data(interval: str, period: str) -> Tuple[pd.DataFrame, Optional[str], str]:
     effective_period, note = coerce_period_for_interval(interval, period)
     download_interval = "60m" if interval in {"2h", "4h"} else interval
 
-    df = yf.download(
-        symbol,
-        period=effective_period,
-        interval=download_interval,
-        auto_adjust=False,
-        progress=False,
-        prepost=True,
-        group_by="column",
-        threads=False,
-    )
+    def fetch_one(symbol: str) -> pd.DataFrame:
+        df = yf.download(
+            symbol,
+            period=effective_period,
+            interval=download_interval,
+            auto_adjust=False,
+            progress=False,
+            prepost=True,
+            group_by="column",
+            threads=False,
+        )
 
-    if df is None or df.empty:
-        try:
-            df = yf.Ticker(symbol).history(
-                period=effective_period,
-                interval=download_interval,
-                auto_adjust=False,
-                back_adjust=False,
-                actions=False,
-                prepost=True,
-            )
-        except Exception:
-            df = pd.DataFrame()
+        if df is None or df.empty:
+            try:
+                df = yf.Ticker(symbol).history(
+                    period=effective_period,
+                    interval=download_interval,
+                    auto_adjust=False,
+                    back_adjust=False,
+                    actions=False,
+                    prepost=True,
+                )
+            except Exception:
+                df = pd.DataFrame()
 
-    if df is None or df.empty:
-        return pd.DataFrame(), note, effective_period
+        if df is None or df.empty:
+            return pd.DataFrame()
 
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = [c[0] for c in df.columns]
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [c[0] for c in df.columns]
 
-    required_cols = ["Open", "High", "Low", "Close", "Volume"]
-    if not all(col in df.columns for col in required_cols):
-        return pd.DataFrame(), note, effective_period
+        needed = {"Open", "High", "Low", "Close", "Volume"}
+        if not needed.issubset(set(df.columns)):
+            return pd.DataFrame()
 
-    df = df[required_cols].dropna().copy()
-    df.index = pd.to_datetime(df.index)
+        return df.copy()
+
+    btc = fetch_one("BTC-USD")
+    fx = fetch_one("IDR=X")  # USD/IDR
+
+    if btc.empty or fx.empty:
+        return pd.DataFrame(), "Gagal mengambil BTC-USD atau USD/IDR dari Yahoo Finance.", effective_period
+
+    btc = btc[["Open", "High", "Low", "Close", "Volume"]].dropna().copy()
+    fx = fx[["Close"]].rename(columns={"Close": "FX"}).dropna().copy()
+
+    btc.index = pd.to_datetime(btc.index)
+    fx.index = pd.to_datetime(fx.index)
+
+    btc = btc[~btc.index.duplicated(keep="last")].sort_index()
+    fx = fx[~fx.index.duplicated(keep="last")].sort_index()
+
+    # join nearest timestamps
+    df = btc.join(fx, how="left")
+    df["FX"] = df["FX"].ffill().bfill()
+
+    # convert BTC-USD -> BTC-IDR theoretical
+    for col in ["Open", "High", "Low", "Close"]:
+        df[col] = df[col] * df["FX"]
+
+    df = df.dropna().copy()
 
     if isinstance(df.index, pd.DatetimeIndex):
         try:
@@ -261,13 +280,16 @@ def load_data(symbol: str, interval: str, period: str) -> Tuple[pd.DataFrame, Op
         freq = "2H" if interval == "2h" else "4H"
         df = (
             df.resample(freq)
-            .agg({
-                "Open": "first",
-                "High": "max",
-                "Low": "min",
-                "Close": "last",
-                "Volume": "sum",
-            })
+            .agg(
+                {
+                    "Open": "first",
+                    "High": "max",
+                    "Low": "min",
+                    "Close": "last",
+                    "Volume": "sum",
+                    "FX": "last",
+                }
+            )
             .dropna()
         )
 
@@ -296,9 +318,9 @@ def load_data(symbol: str, interval: str, period: str) -> Tuple[pd.DataFrame, Op
     return df, note, effective_period
 
 
-# =========================
-# MARKET STRUCTURE
-# =========================
+# =========================================================
+# MARKET STRUCTURE HELPERS
+# =========================================================
 def find_pivots(df: pd.DataFrame, left: int = 3, right: int = 3) -> Tuple[List[int], List[int]]:
     highs, lows = [], []
     hi = df["High"].to_numpy()
@@ -308,9 +330,8 @@ def find_pivots(df: pd.DataFrame, left: int = 3, right: int = 3) -> Tuple[List[i
         return highs, lows
 
     for i in range(left, len(df) - right):
-        hi_slice = hi[i - left:i + right + 1]
-        lo_slice = lo[i - left:i + right + 1]
-
+        hi_slice = hi[i - left : i + right + 1]
+        lo_slice = lo[i - left : i + right + 1]
         if hi[i] == np.max(hi_slice) and np.sum(hi_slice == hi[i]) == 1:
             highs.append(i)
         if lo[i] == np.min(lo_slice) and np.sum(lo_slice == lo[i]) == 1:
@@ -321,6 +342,7 @@ def find_pivots(df: pd.DataFrame, left: int = 3, right: int = 3) -> Tuple[List[i
 
 def cluster_levels(prices: List[float], indices: List[int], kind: str, tolerance_pct: float = 0.02) -> List[LevelCluster]:
     clusters: List[dict] = []
+
     for price, idx in zip(prices, indices):
         matched = False
         for c in clusters:
@@ -331,11 +353,13 @@ def cluster_levels(prices: List[float], indices: List[int], kind: str, tolerance
                 c["level"] = float(np.mean(c["members"]))
                 matched = True
                 break
+
         if not matched:
             clusters.append({"members": [price], "indices": [idx], "level": float(price)})
 
     output: List[LevelCluster] = []
     max_idx = max(indices) if indices else 1
+
     for c in clusters:
         count = len(c["members"])
         anchor_idx = min(c["indices"])
@@ -355,6 +379,7 @@ def cluster_levels(prices: List[float], indices: List[int], kind: str, tolerance
                 members=c["members"],
             )
         )
+
     return output
 
 
@@ -406,7 +431,6 @@ def detect_trend(df: pd.DataFrame) -> str:
         hl = last_two_lows[-1] > last_two_lows[-2]
         lh = last_two_highs[-1] < last_two_highs[-2]
         ll = last_two_lows[-1] < last_two_lows[-2]
-
         if hh and hl:
             return "Uptrend"
         if lh and ll:
@@ -497,12 +521,13 @@ def detect_pattern_signals(df: pd.DataFrame, levels: Dict[str, Optional[LevelClu
             chosen.append(sig)
         if len(chosen) >= 4:
             break
+
     return sorted(chosen, key=lambda s: s.idx)
 
 
-# =========================
+# =========================================================
 # CHART HELPERS
-# =========================
+# =========================================================
 def merge_line_items(levels: Dict[str, Optional[LevelCluster]]) -> List[Tuple[LevelCluster, str]]:
     items: List[Tuple[LevelCluster, str]] = []
     s_near = levels.get("support_near")
@@ -554,7 +579,6 @@ def distribute_label_positions(levels: List[float], y_min: float, y_max: float, 
 
     placed = list(levels)
     placed[0] = max(placed[0], y_min)
-
     for i in range(1, len(placed)):
         placed[i] = max(placed[i], placed[i - 1] + min_gap)
 
@@ -587,12 +611,12 @@ def choose_tick_positions(index: pd.DatetimeIndex, interval: str, period: str) -
 
     if intraday_show_datetime:
         if len(unique_days) == 1:
-            preferred = ["09:00", "11:00", "13:00", "15:00", "19:00", "23:00"]
+            preferred = ["00:00", "06:00", "12:00", "18:00"]
             base_day = unique_days[-1]
             for t in preferred:
                 add_nearest(pd.Timestamp(f"{base_day.date()} {t}"), f"{base_day.strftime('%d %b %Y')}<br>{t}")
         elif len(unique_days) <= 7:
-            preferred = ["00:00", "08:00", "16:00"]
+            preferred = ["00:00", "12:00"]
             for day in unique_days:
                 for t in preferred:
                     add_nearest(pd.Timestamp(f"{day.date()} {t}"), f"{day.strftime('%d %b %Y')}<br>{t}")
@@ -621,6 +645,10 @@ def choose_tick_positions(index: pd.DatetimeIndex, interval: str, period: str) -
     return dedup_pos, dedup_lbl
 
 
+def label_x_position(df: pd.DataFrame) -> float:
+    return len(df) - 1 + 3.2
+
+
 def x_range_for_chart(df: pd.DataFrame, interval: str) -> List[float]:
     last_n_map = {
         "60m": 100,
@@ -631,7 +659,6 @@ def x_range_for_chart(df: pd.DataFrame, interval: str) -> List[float]:
     }
     window = last_n_map.get(interval, 100)
     right_pad = 7.2
-
     if len(df) > window:
         return [len(df) - window, len(df) - 1 + right_pad]
     return [-0.5, len(df) - 1 + right_pad]
@@ -665,7 +692,7 @@ def base_price_volume_figure(df: pd.DataFrame, interval: str, period: str) -> Tu
             decreasing_line_color=RED,
             decreasing_fillcolor=RED,
             whiskerwidth=0.5,
-            hovertemplate="<b>%{customdata}</b><br>Open: %{open}<br>High: %{high}<br>Low: %{low}<br>Close: %{close}<extra></extra>",
+            hovertemplate="<b>%{customdata}</b><br>Open: %{open:,.0f}<br>High: %{high:,.0f}<br>Low: %{low:,.0f}<br>Close: %{close:,.0f}<extra></extra>",
             name="Price",
         ),
         row=1,
@@ -687,7 +714,6 @@ def base_price_volume_figure(df: pd.DataFrame, interval: str, period: str) -> Tu
         row=2,
         col=1,
     )
-
     fig.add_trace(
         go.Scatter(
             x=x_vals,
@@ -767,7 +793,6 @@ def base_price_volume_figure(df: pd.DataFrame, interval: str, period: str) -> Tu
         font=dict(color="#111111", size=13),
         bargap=0.04,
     )
-
     return fig, y_min, y_max
 
 
@@ -780,7 +805,7 @@ def add_price_annotations(fig: go.Figure, df: pd.DataFrame, items: List[dict], y
     grouped: Dict[float, List[dict]] = {}
 
     for item in items:
-        x_val = float(item.get("x_override", len(df) - 1 + 3.2))
+        x_val = float(item.get("x_override", label_x_position(df)))
         grouped.setdefault(x_val, []).append(item)
 
     for x_val, group_items in grouped.items():
@@ -818,7 +843,6 @@ def add_sr_lines_and_labels(fig: go.Figure, df: pd.DataFrame, levels: Dict[str, 
     last_x = len(df) - 1
     rail_left = len(df) - 1 + 1.95
     rail_right = len(df) - 1 + 4.35
-
     tag_x_map = {
         "SK": rail_left,
         "SD": rail_right,
@@ -827,7 +851,6 @@ def add_sr_lines_and_labels(fig: go.Figure, df: pd.DataFrame, levels: Dict[str, 
         "RK": rail_right,
         "RKRD": rail_right,
     }
-
     for cluster, tag in line_items:
         start_x = max(0, cluster.anchor_idx)
         fig.add_shape(
@@ -850,7 +873,6 @@ def add_sr_lines_and_labels(fig: go.Figure, df: pd.DataFrame, levels: Dict[str, 
                 "x_override": tag_x_map.get(tag, rail_right),
             }
         )
-
     add_price_annotations(fig, df, labels, y_min, y_max)
 
 
@@ -876,14 +898,12 @@ def add_ma_and_close_labels(fig: go.Figure, df: pd.DataFrame, selected_mas: List
                 "x_override": ma_rail,
             }
         )
-
     add_price_annotations(fig, df, labels, y_min, y_max)
 
 
 def add_pattern_markers(fig: go.Figure, df: pd.DataFrame, signals: List[PatternSignal], y_pad: float):
     if not signals:
         return
-
     xs, ys, texts, colors = [], [], [], []
     for sig in signals:
         i = sig.idx
@@ -893,7 +913,6 @@ def add_pattern_markers(fig: go.Figure, df: pd.DataFrame, signals: List[PatternS
         ts = df.index[i].strftime("%d %b %Y %H:%M") if hasattr(df.index[i], "strftime") else ""
         texts.append(f"{sig.name}<br>{ts}<br>{sig.probability * 100:.0f}% {sig.bias}")
         colors.append(GREEN if sig.bias == "naik" else RED)
-
     fig.add_trace(
         go.Scatter(
             x=xs,
@@ -913,9 +932,6 @@ def add_pattern_markers(fig: go.Figure, df: pd.DataFrame, signals: List[PatternS
     )
 
 
-# =========================
-# FIBONACCI
-# =========================
 def calculate_fibonacci_context(df: pd.DataFrame) -> Dict[str, object]:
     low_idx = int(df["Low"].to_numpy().argmin())
     high_idx = int(df["High"].to_numpy().argmax())
@@ -933,7 +949,6 @@ def calculate_fibonacci_context(df: pd.DataFrame) -> Dict[str, object]:
             price = swing_high - price_range * ratio
         else:
             price = swing_low + price_range * ratio
-
         levels.append(
             FibLevel(
                 ratio=ratio,
@@ -962,7 +977,6 @@ def add_fibonacci_lines(fig: go.Figure, df: pd.DataFrame, fib_context: Dict[str,
     start_x = int(min(fib_context["low_idx"], fib_context["high_idx"]))
     last_x = len(df) - 1
     fib_rail = len(df) - 1 + 3.35
-
     for level in levels:
         fig.add_shape(
             type="line",
@@ -990,25 +1004,34 @@ def add_fibonacci_lines(fig: go.Figure, df: pd.DataFrame, fib_context: Dict[str,
     add_price_annotations(fig, df, labels, y_min, y_max)
 
 
-# =========================
-# MACD / RSI
-# =========================
+def make_ma_toolbar():
+    st.markdown('<div class="toolbar-title">Checklist MA</div>', unsafe_allow_html=True)
+    cols = st.columns(len(MA_WINDOWS))
+    selected: List[int] = []
+    for col, ma in zip(cols, MA_WINDOWS):
+        with col:
+            checked = st.checkbox(f"MA {ma}", key=f"ma_{ma}_on")
+            if checked:
+                selected.append(ma)
+    return selected
+
+
+# =========================================================
+# MACD / RSI HELPERS
+# =========================================================
 def recent_cross(series_a: pd.Series, series_b: pd.Series, lookback: int = 5) -> Optional[Tuple[str, int]]:
     if len(series_a) < 2 or len(series_b) < 2:
         return None
-
     start = max(1, len(series_a) - lookback)
     for i in range(start, len(series_a)):
         prev_a = float(series_a.iloc[i - 1])
         prev_b = float(series_b.iloc[i - 1])
         curr_a = float(series_a.iloc[i])
         curr_b = float(series_b.iloc[i])
-
         if prev_a <= prev_b and curr_a > curr_b:
             return "bullish", len(series_a) - 1 - i
         if prev_a >= prev_b and curr_a < curr_b:
             return "bearish", len(series_a) - 1 - i
-
     return None
 
 
@@ -1048,7 +1071,6 @@ def detect_rsi_divergences(df: pd.DataFrame) -> Tuple[Optional[str], Optional[st
 
 def build_macd_rsi_cards(df: pd.DataFrame) -> List[SignalCard]:
     cards: List[SignalCard] = []
-
     last_rsi = float(df["RSI"].iloc[-1])
     if last_rsi >= 70:
         cards.append(SignalCard("RSI Status", "Overbought", f"RSI {last_rsi:.2f} di atas 70"))
@@ -1081,7 +1103,6 @@ def build_macd_rsi_chart(df: pd.DataFrame, interval: str, period: str) -> Tuple[
         ts.strftime("%d %b %Y %H:%M") if is_intraday_interval(interval) else ts.strftime("%d %b %Y")
         for ts in df.index
     ]
-
     fig = make_subplots(
         rows=3,
         cols=1,
@@ -1102,7 +1123,7 @@ def build_macd_rsi_chart(df: pd.DataFrame, interval: str, period: str) -> Tuple[
             increasing_fillcolor=GREEN,
             decreasing_line_color=RED,
             decreasing_fillcolor=RED,
-            hovertemplate="<b>%{customdata}</b><br>Open: %{open}<br>High: %{high}<br>Low: %{low}<br>Close: %{close}<extra></extra>",
+            hovertemplate="<b>%{customdata}</b><br>Open: %{open:,.0f}<br>High: %{high:,.0f}<br>Low: %{low:,.0f}<br>Close: %{close:,.0f}<extra></extra>",
             name="Price",
         ),
         row=1,
@@ -1175,7 +1196,6 @@ def build_macd_rsi_chart(df: pd.DataFrame, interval: str, period: str) -> Tuple[
 
     tickvals, ticktext = choose_tick_positions(df.index, interval, period)
     xr = x_range_for_chart(df, interval)
-
     fig.update_xaxes(
         tickmode="array",
         tickvals=tickvals,
@@ -1188,47 +1208,12 @@ def build_macd_rsi_chart(df: pd.DataFrame, interval: str, period: str) -> Tuple[
         linecolor="#111111",
         zeroline=False,
     )
-
     for row in [1, 2, 3]:
         fig.update_xaxes(range=xr, row=row, col=1)
 
-    fig.update_yaxes(
-        range=[y_min, y_max],
-        row=1,
-        col=1,
-        side="right",
-        title_text="Price",
-        tickfont=dict(size=13, color="#111111"),
-        title_font=dict(size=13, color="#111111"),
-        showgrid=True,
-        gridcolor="#D3D3D3",
-        linecolor="#111111",
-    )
-    fig.update_yaxes(
-        row=2,
-        col=1,
-        side="right",
-        title_text="MACD",
-        tickfont=dict(size=12, color="#111111"),
-        title_font=dict(size=12, color="#111111"),
-        showgrid=True,
-        gridcolor="#D3D3D3",
-        linecolor="#111111",
-        zeroline=True,
-        zerolinecolor="#777777",
-    )
-    fig.update_yaxes(
-        range=[0, 100],
-        row=3,
-        col=1,
-        side="right",
-        title_text="RSI",
-        tickfont=dict(size=12, color="#111111"),
-        title_font=dict(size=12, color="#111111"),
-        showgrid=True,
-        gridcolor="#D3D3D3",
-        linecolor="#111111",
-    )
+    fig.update_yaxes(range=[y_min, y_max], row=1, col=1, side="right", title_text="Price", tickfont=dict(size=13, color="#111111"), title_font=dict(size=13, color="#111111"), showgrid=True, gridcolor="#D3D3D3", linecolor="#111111")
+    fig.update_yaxes(row=2, col=1, side="right", title_text="MACD", tickfont=dict(size=12, color="#111111"), title_font=dict(size=12, color="#111111"), showgrid=True, gridcolor="#D3D3D3", linecolor="#111111", zeroline=True, zerolinecolor="#777777")
+    fig.update_yaxes(range=[0, 100], row=3, col=1, side="right", title_text="RSI", tickfont=dict(size=12, color="#111111"), title_font=dict(size=12, color="#111111"), showgrid=True, gridcolor="#D3D3D3", linecolor="#111111")
 
     last_close = float(df["Close"].iloc[-1])
     fig.add_hline(y=last_close, line_color=BLACK, line_width=1.1, line_dash="dash", row=1, col=1)
@@ -1243,13 +1228,12 @@ def build_macd_rsi_chart(df: pd.DataFrame, interval: str, period: str) -> Tuple[
         height=920,
         font=dict(color="#111111", size=13),
     )
-
     return fig, detect_trend(df), build_macd_rsi_cards(df)
 
 
-# =========================
-# BUILD CHARTS
-# =========================
+# =========================================================
+# SR / FIB CHART BUILDERS
+# =========================================================
 def build_sr_chart(df: pd.DataFrame, interval: str, period: str, selected_mas: List[int]) -> Tuple[go.Figure, Dict[str, Optional[LevelCluster]], str, List[PatternSignal]]:
     high_idx, low_idx = find_pivots(df, left=3, right=3)
     levels = choose_key_levels(df, high_idx, low_idx)
@@ -1257,7 +1241,6 @@ def build_sr_chart(df: pd.DataFrame, interval: str, period: str, selected_mas: L
     signals = detect_pattern_signals(df, levels, trend)
 
     fig, y_min, y_max = base_price_volume_figure(df, interval, period)
-
     for ma in selected_mas:
         col_name = f"MA{ma}"
         color = MA_COLORS.get(ma, "#5EA3DA")
@@ -1267,7 +1250,7 @@ def build_sr_chart(df: pd.DataFrame, interval: str, period: str, selected_mas: L
                 y=df[col_name],
                 mode="lines",
                 line=dict(color=color, width=2.0),
-                hovertemplate=f"<b>%{{text}}</b><br>{col_name}: %{{y:.2f}}<extra></extra>",
+                hovertemplate=f"<b>%{{text}}</b><br>{col_name}: %{{y:,.0f}}<extra></extra>",
                 text=[ts.strftime("%d %b %Y %H:%M") if is_intraday_interval(interval) else ts.strftime("%d %b %Y") for ts in df.index],
                 name=col_name,
             ),
@@ -1279,30 +1262,26 @@ def build_sr_chart(df: pd.DataFrame, interval: str, period: str, selected_mas: L
     add_sr_lines_and_labels(fig, df, levels, y_min, y_max)
     add_ma_and_close_labels(fig, df, selected_mas, y_min, y_max)
     add_pattern_markers(fig, df, signals, price_range * 0.03)
-
     return fig, levels, trend, signals
 
 
 def build_fibonacci_chart(df: pd.DataFrame, interval: str, period: str) -> Tuple[go.Figure, Dict[str, object], str]:
     fib_context = calculate_fibonacci_context(df)
     trend = detect_trend(df)
-
     fig, y_min, y_max = base_price_volume_figure(df, interval, period)
     add_fibonacci_lines(fig, df, fib_context, y_min, y_max)
-
     return fig, fib_context, trend
 
 
-# =========================
+# =========================================================
 # UI HELPERS
-# =========================
+# =========================================================
 def assess_risk(levels: Dict[str, Optional[LevelCluster]], trend: str, last_close: float) -> Tuple[str, str]:
     support = levels.get("support_near") or levels.get("support_strong")
     resistance = levels.get("resistance_near") or levels.get("resistance_strong")
 
     reasons: List[str] = []
     score = 0
-
     if trend == "Downtrend":
         score += 2
         reasons.append("tren masih turun")
@@ -1345,7 +1324,7 @@ def inject_css():
         f"""
         <style>
         .stApp {{
-            background: linear-gradient(180deg, #020814 0%, #06111f 100%);
+            background: linear-gradient(180deg, #02070f 0%, #05101c 100%);
         }}
         .sr-card {{
             border: 1px solid {CARD_BORDER};
@@ -1470,10 +1449,6 @@ def inject_css():
         }}
         div[data-testid="stCheckbox"] label p {{
             font-size: 0.92rem;
-            color: #D9E3F0;
-        }}
-        label, .stSelectbox label {{
-            color: #D9E3F0 !important;
         }}
         @media (max-width: 768px) {{
             .sr-card {{ padding: 10px 10px; min-height: 110px; }}
@@ -1573,7 +1548,6 @@ def render_header(
         pill_parts.append(f'<span class="trend-pill {risk_class}">Risk: {html.escape(risk_label)}</span>')
     if extra_pill:
         pill_parts.append(f'<span class="trend-pill trend-side">{html.escape(extra_pill)}</span>')
-
     if pill_parts:
         parts.append('<div class="info-pill-row">' + ''.join(pill_parts) + '</div>')
 
@@ -1617,23 +1591,9 @@ def render_pattern_summary(signals: List[PatternSignal]):
     )
 
 
-def make_ma_toolbar() -> List[int]:
-    st.markdown('<div class="toolbar-title">Checklist MA</div>', unsafe_allow_html=True)
-    cols = st.columns(len(MA_WINDOWS))
-    selected: List[int] = []
-
-    for col, ma in zip(cols, MA_WINDOWS):
-        with col:
-            checked = st.checkbox(f"MA {ma}", key=f"ma_{ma}_on")
-            if checked:
-                selected.append(ma)
-
-    return selected
-
-
-# =========================
-# SESSION STATE DEFAULTS
-# =========================
+# =========================================================
+# APP INIT
+# =========================================================
 inject_css()
 
 if "analysis_mode" not in st.session_state:
@@ -1649,10 +1609,10 @@ for ma in MA_WINDOWS:
         st.session_state[key] = ma == 10
 
 
-# =========================
-# TOP CONTROLS
-# =========================
-left_title, right_btn = st.columns([0.78, 0.22])
+# =========================================================
+# TOP UI
+# =========================================================
+left_title, right_btn = st.columns([0.86, 0.14])
 
 with left_title:
     st.selectbox(
@@ -1666,15 +1626,16 @@ with right_btn:
     st.markdown(
         """
         <div style="
-            border:1px solid #0d4f93;
+            display:flex;
+            align-items:center;
+            justify-content:center;
+            height:52px;
+            border:1px solid #0d4e8a;
+            border-radius:14px;
             background:#031427;
             color:white;
-            border-radius:14px;
-            padding:14px 12px;
-            text-align:center;
             font-weight:800;
-            margin-top:2px;
-        ">
+            font-size:20px;">
             BTC/IDR
         </div>
         """,
@@ -1688,7 +1649,6 @@ with ctrl1:
         options=list(TIMEFRAME_MAP.keys()),
         key="tf_select",
     )
-
 with ctrl2:
     st.selectbox(
         "Durasi",
@@ -1696,25 +1656,20 @@ with ctrl2:
         key="durasi_select",
     )
 
-
-# =========================
-# MAIN
-# =========================
-symbol = SYMBOL
-shown_code = "BTC/IDR"
 interval = TIMEFRAME_MAP[st.session_state.tf_select]
 requested_period = DURATION_MAP[st.session_state.durasi_select]
 mode = st.session_state.analysis_mode
+shown_code = "BTC/IDR"
 
-with st.spinner(f"Mengambil data {symbol}..."):
-    data, note, effective_period = load_data(symbol, interval, requested_period)
+with st.spinner("Mengambil data BTC/IDR dari BTC-USD × USD/IDR..."):
+    data, note, effective_period = load_data(interval, requested_period)
 
 if note:
     st.warning(note)
 
 if data.empty:
-    st.error("Data tidak tersedia untuk BTC-IDR dari Yahoo Finance.")
-elif len(data) < 30:
+    st.error("Data BTC/IDR tidak tersedia. App ini memakai konversi BTC-USD × USD/IDR dari Yahoo Finance.")
+elif len(data) < 3:
     st.error(f"Data terlalu sedikit untuk dianalisis. Rows: {len(data)}")
 else:
     if mode == "Support & Resistance":
@@ -1753,10 +1708,9 @@ else:
             data=data,
             tf_label=st.session_state.tf_select,
             duration_label=label_period(effective_period),
-            trend=trend,
+            trend="",
             extra_pill=fib_context["direction_label"],
         )
-
     else:
         fig, trend, macd_cards = build_macd_rsi_chart(data, interval, effective_period)
         signal_cols = st.columns(4)
@@ -1781,14 +1735,8 @@ else:
             "responsive": True,
             "doubleClick": "reset+autosize",
             "modeBarButtonsToRemove": [
-                "select2d",
-                "lasso2d",
-                "drawline",
-                "drawopenpath",
-                "eraseshape",
-                "toggleSpikelines",
-                "hoverClosestCartesian",
-                "hoverCompareCartesian",
+                "select2d", "lasso2d", "drawline", "drawopenpath", "eraseshape",
+                "toggleSpikelines", "hoverClosestCartesian", "hoverCompareCartesian"
             ],
         },
     )
@@ -1800,20 +1748,23 @@ else:
             st.write(
                 "- Mode Support & Resistance menampilkan garis SR, volume, VMA20, garis close, dan checklist MA harga.\n"
                 f"- MA aktif saat ini: {ma_note}.\n"
-                "- Label harga dipindah ke area kosong di kanan supaya tidak menutupi candle.\n"
+                "- Harga BTC/IDR di app ini adalah hasil konversi BTC-USD × USD/IDR, bukan feed orderbook exchange lokal.\n"
+                "- Label harga di kanan dipindah ke area kosong agar tidak menutupi candle.\n"
                 "- Probabilitas pola candle bersifat heuristik, bukan kepastian."
             )
         elif mode == "Fibonacci":
             fib_lines = [f"- {level.ratio_label}: {level.description}" for level in fib_context["levels"]]
             st.write(
-                "- Mode Fibonacci menampilkan garis Fibonacci retracement, garis close terakhir, volume, dan VMA20.\n"
-                "- Tidak menampilkan SK, SD, RK, RD, MA harga, atau sinyal candle.\n"
-                "- Anchor Fibonacci diambil dari swing high dan swing low pada durasi yang dipilih.\n"
+                "- Mode Fibonacci hanya menampilkan garis Fibonacci retracement, garis close terakhir, volume, dan MA20 volume.\n"
+                "- Tidak ada SK, SD, RK, RD, SKSD, RKRD, MA harga, atau sinyal candle penting di mode ini.\n"
+                "- Anchor Fibonacci diambil dari swing high dan swing low tertinggi/terendah pada durasi yang dipilih.\n"
+                "- Harga BTC/IDR di app ini adalah hasil konversi BTC-USD × USD/IDR.\n"
                 + "\n".join(fib_lines)
             )
         else:
             st.write(
                 "- Mode MACD & RSI menampilkan candle price, panel MACD, dan panel RSI.\n"
                 "- Kartu di atas menyorot status RSI, cross MACD, serta divergence bullish/bearish bila terdeteksi.\n"
-                "- Divergence dihitung dari pivot harga terbaru dan pembacaan RSI, jadi sifatnya indikatif."
+                "- Divergence dihitung dari pivot harga terbaru dan pembacaan RSI, jadi sifatnya indikatif.\n"
+                "- Harga BTC/IDR di app ini adalah hasil konversi BTC-USD × USD/IDR."
             )
